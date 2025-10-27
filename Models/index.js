@@ -4,14 +4,38 @@ import dotenv from "dotenv";
 dotenv.config();
 
 // ✅ Initialize Sequelize connection
+// const sequelize = new Sequelize(
+//   process.env.MYSQL_DB,
+//   process.env.MYSQL_USER,
+//   process.env.MYSQL_PASSWORD,
+//   {
+//     host: process.env.MYSQL_HOST || "localhost",
+//     dialect: "mysql",
+//     dialectOptions: {
+//       ssl: {
+//         require: true,
+//         rejectUnauthorized: true
+//       }
+//     },
+//     logging: false,
+//   }
+// );
+
 const sequelize = new Sequelize(
-  process.env.MYSQL_DB,
-  process.env.MYSQL_USER,
-  process.env.MYSQL_PASSWORD,
+  process.env.DB_NAME,   
+  process.env.DB_USER,   
+  process.env.DB_PASSWORD,
   {
-    host: process.env.MYSQL_HOST || "localhost",
-    dialect: "mysql",
-    logging: false,
+    host: process.env.DB_HOST,
+    port: process.env.DB_PORT,
+    dialect: 'mysql',
+    dialectOptions: {
+  ssl: {
+    require: true,
+    rejectUnauthorized: false
+  }
+},
+    logging: false
   }
 );
 
