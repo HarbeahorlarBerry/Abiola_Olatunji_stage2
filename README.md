@@ -121,3 +121,11 @@ Route	Method	URL	Description
 /status	GET	http://localhost:6000/status	Check stats
 /countries/image	GET	http://localhost:6000/countries/image	Get summary image
 🌍 STEP 5 — Deploy on Railway
+
+
+
+
+DB_NAME=defaultdb
+DB_PORT=14556
+DB_HOST=mysql-262f63ce-abiolaolatunji100-aa34.d.aivencloud.com
+DB_USER=avnadmin
