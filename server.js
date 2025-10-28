@@ -29,7 +29,7 @@ if (!fs.existsSync(cacheDir)) {
 // ✅ Routes
 app.use("/countries", countriesRouter);
 
-// ✅ Status route (points correctly to controller)
+// ✅ Status route
 app.get("/status", async (req, res) => {
   try {
     const { getStatus } = await import("./Controllers/CountriesApis/countriesController.js");
@@ -60,8 +60,9 @@ const startServer = async () => {
     await sequelize.authenticate();
     console.log("✅ Database connected successfully.");
 
-    await sequelize.sync(); // Sync models if not existing
-    console.log("✅ Models synchronized.");
+    // 🟢 FIX: Alter the DB schema automatically if columns are missing (like created_at)
+    await sequelize.sync({ alter: true }); 
+    console.log("✅ Models synchronized (altered if needed).");
 
     app.listen(PORT, () => {
       console.log(`🚀 Server listening on http://localhost:${PORT}`);
