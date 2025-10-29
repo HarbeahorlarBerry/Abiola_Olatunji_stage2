@@ -8,11 +8,10 @@ const RATES_API = process.env.EXTERNAL_EXCHANGE_API;
 const TIMEOUT = Number(process.env.REFRESH_TIMEOUT_MS || 15000);
 const CACHE_DIR = process.env.CACHE_DIR || "./cache";
 const SUMMARY_PATH = path.join(CACHE_DIR, "summary.png");
-// Random multiplier between 1000 and 2000
+const BATCH_SIZE = 50; // Insert 50 countries at a time
 function randMultiplier() {
-  return Math.floor(Math.random() * (2000 - 1000 + 1)) + 1000;
+  return Math.floor(Math.random() * 1001) + 1000;
 }
-// :white_check_mark: POST /countries/refresh
 export async function refreshCountries(req, res) {
   let countriesData, ratesData;
   try {
@@ -32,7 +31,9 @@ export async function refreshCountries(req, res) {
   const rates = ratesData?.rates || {};
   if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
   try {
-    let processed = 0;
+    // Process all countries into batch data first (no DB calls)
+    const batchValues = [];
+    const now = new Date();
     for (const c of countriesData) {
       const name = c.name || c.name?.common || null;
       if (!name) continue;
@@ -58,47 +59,56 @@ export async function refreshCountries(req, res) {
           estimated_gdp = exchange_rate === 0 ? 0 : (population * m) / exchange_rate;
         }
       }
-      const now = new Date();
+      batchValues.push([
+        name,
+        capital,
+        region,
+        population,
+        currency_code,
+        exchange_rate,
+        estimated_gdp,
+        flag_url,
+        now,
+        now, // created_at
+        now, // updated_at
+      ]);
+    }
+    // Batch insert in chunks
+    const processed = batchValues.length;
+    for (let i = 0; i < batchValues.length; i += BATCH_SIZE) {
+      const chunk = batchValues.slice(i, i + BATCH_SIZE);
+      const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(",");
+      const flatValues = chunk.flat();
       await pool.query(
         `INSERT INTO countries (name, capital, region, population, currency_code, exchange_rate, estimated_gdp, flag_url, last_refreshed_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+         VALUES ${placeholders}
          ON DUPLICATE KEY UPDATE
            capital=VALUES(capital), region=VALUES(region), population=VALUES(population), currency_code=VALUES(currency_code),
            exchange_rate=VALUES(exchange_rate), estimated_gdp=VALUES(estimated_gdp), flag_url=VALUES(flag_url), last_refreshed_at=VALUES(last_refreshed_at),
-           updated_at=NOW()`,
-        [
-          name,
-          capital,
-          region,
-          population,
-          currency_code,
-          exchange_rate,
-          estimated_gdp,
-          flag_url,
-          now,
-        ]
+           updated_at=VALUES(updated_at)`,
+        flatValues
       );
-      processed++;
     }
-    const [[count]] = await pool.query(`SELECT COUNT(*) AS total FROM countries`);
-    const [[last]] = await pool.query(
-      `SELECT MAX(last_refreshed_at) AS last_refreshed_at FROM countries`
-    );
-    const [[top5]] = await pool.query(
-      `SELECT name, estimated_gdp FROM countries
-       WHERE estimated_gdp IS NOT NULL AND estimated_gdp > 0
-       ORDER BY estimated_gdp DESC LIMIT 5`
-    );
-    try {
-      await generateSummaryImage({
-        countries: top5,  // Assuming the function expects 'countries' as the array
-        totalCountries: count.total,
-        timestamp: last.last_refreshed_at,
-        outPath: SUMMARY_PATH,
-      });
-    } catch (imgErr) {
-      console.warn("Image generation failed:", imgErr.message);
-    }
+    // Single query for all stats (parallelised)
+    const [countRes, lastRes, top5Res] = await Promise.all([
+      pool.query(`SELECT COUNT(*) AS total FROM countries`),
+      pool.query(`SELECT MAX(last_refreshed_at) AS last_refreshed_at FROM countries`),
+      pool.query(
+        `SELECT name, estimated_gdp FROM countries
+         WHERE estimated_gdp IS NOT NULL AND estimated_gdp > 0
+         ORDER BY estimated_gdp DESC LIMIT 5`
+      ),
+    ]);
+    const count = countRes[0][0];
+    const last = lastRes[0][0];
+    const top5 = top5Res[0];
+    // Image generation off the critical path (fire and forget if needed)
+    generateSummaryImage({
+      countries: top5,
+      totalCountries: count.total,
+      timestamp: last.last_refreshed_at,
+      outPath: SUMMARY_PATH,
+    }).catch((err) => console.warn("Image generation failed:", err.message));
     return res.json({
       message: "Refresh successful",
       total_countries: count.total,
@@ -110,7 +120,6 @@ export async function refreshCountries(req, res) {
     return res.status(500).json({ error: "Internal server error" });
   }
 }
-// :white_check_mark: GET /countries
 export async function getCountries(req, res) {
   try {
     const { region, currency, sort, page = 1, limit = 500 } = req.query;
@@ -138,7 +147,6 @@ export async function getCountries(req, res) {
     res.status(500).json({ error: "Internal server error" });
   }
 }
-// :white_check_mark: GET /countries/:name
 export async function getCountryByName(req, res) {
   try {
     const name = req.params.name;
@@ -153,7 +161,6 @@ export async function getCountryByName(req, res) {
     res.status(500).json({ error: "Internal server error" });
   }
 }
-// :white_check_mark: DELETE /countries/:name
 export async function deleteCountryByName(req, res) {
   try {
     const name = req.params.name;
@@ -169,7 +176,6 @@ export async function deleteCountryByName(req, res) {
     res.status(500).json({ error: "Internal server error" });
   }
 }
-// :white_check_mark: GET /status
 export async function getStatus(req, res) {
   try {
     const [[count]] = await pool.query(`SELECT COUNT(*) AS total FROM countries`);
@@ -185,7 +191,6 @@ export async function getStatus(req, res) {
     res.status(500).json({ error: "Internal server error" });
   }
 }
-// :white_check_mark: GET /countries/image
 export async function serveSummaryImage(req, res) {
   try {
     if (!fs.existsSync(SUMMARY_PATH))
@@ -197,3 +202,18 @@ export async function serveSummaryImage(req, res) {
     res.status(500).json({ error: "Internal server error" });
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
