@@ -3,19 +3,16 @@ import axios from "axios";
 import fs from "fs";
 import path from "path";
 import { generateSummaryImage } from "../../Utils/imageGenerator.js";
-
 const COUNTRIES_API = process.env.EXTERNAL_COUNTRIES_API;
 const RATES_API = process.env.EXTERNAL_EXCHANGE_API;
 const TIMEOUT = Number(process.env.REFRESH_TIMEOUT_MS || 15000);
 const CACHE_DIR = process.env.CACHE_DIR || "./cache";
 const SUMMARY_PATH = path.join(CACHE_DIR, "summary.png");
-
 // Random multiplier between 1000 and 2000
 function randMultiplier() {
   return Math.floor(Math.random() * (2000 - 1000 + 1)) + 1000;
 }
-
-// ✅ POST /countries/refresh
+// :white_check_mark: POST /countries/refresh
 export async function refreshCountries(req, res) {
   let countriesData, ratesData;
   try {
@@ -23,7 +20,6 @@ export async function refreshCountries(req, res) {
       axios.get(COUNTRIES_API, { timeout: TIMEOUT }),
       axios.get(RATES_API, { timeout: TIMEOUT }),
     ]);
-
     countriesData = countriesResp.data;
     ratesData = ratesResp.data;
   } catch (err) {
@@ -33,24 +29,19 @@ export async function refreshCountries(req, res) {
       details: err.message,
     });
   }
-
   const rates = ratesData?.rates || {};
   if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
-
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
     let processed = 0;
-
     for (const c of countriesData) {
       const name = c.name || c.name?.common || null;
       if (!name) continue;
-
       const capital = Array.isArray(c.capital) ? c.capital[0] : c.capital || null;
       const region = c.region || null;
       const population = Number(c.population || 0);
       const flag_url = c.flags?.png || c.flag || null;
-
       let currency_code = null;
       if (Array.isArray(c.currencies)) {
         currency_code = c.currencies[0]?.code || null;
@@ -58,7 +49,6 @@ export async function refreshCountries(req, res) {
         const firstKey = Object.keys(c.currencies)[0];
         currency_code = c.currencies[firstKey]?.code || firstKey || null;
       }
-
       let exchange_rate = null;
       let estimated_gdp = null;
       if (currency_code) {
@@ -70,18 +60,17 @@ export async function refreshCountries(req, res) {
           estimated_gdp = exchange_rate === 0 ? 0 : (population * m) / exchange_rate;
         }
       }
-
       const [exists] = await conn.query(
         `SELECT id FROM countries WHERE LOWER(name) = LOWER(?) LIMIT 1`,
         [name]
       );
-
+      console.log(`Checking ${name}: exists = ${exists.length > 0}`);
       const now = new Date();
       if (exists.length > 0) {
         await conn.query(
-          `UPDATE countries 
-           SET capital=?, region=?, population=?, currency_code=?, 
-               exchange_rate=?, estimated_gdp=?, flag_url=?, last_refreshed_at=? 
+          `UPDATE countries
+           SET capital=?, region=?, population=?, currency_code=?,
+               exchange_rate=?, estimated_gdp=?, flag_url=?, last_refreshed_at=?
            WHERE id=?`,
           [
             capital,
@@ -97,8 +86,8 @@ export async function refreshCountries(req, res) {
         );
       } else {
         await conn.query(
-          `INSERT INTO countries (name, capital, region, population, currency_code, exchange_rate, estimated_gdp, flag_url, last_refreshed_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO countries (name, capital, region, population, currency_code, exchange_rate, estimated_gdp, flag_url, last_refreshed_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
           [
             name,
             capital,
@@ -114,30 +103,26 @@ export async function refreshCountries(req, res) {
       }
       processed++;
     }
-
     await conn.commit();
-
     const [[count]] = await pool.query(`SELECT COUNT(*) AS total FROM countries`);
     const [[last]] = await pool.query(
       `SELECT MAX(last_refreshed_at) AS last_refreshed_at FROM countries`
     );
     const [[top5]] = await pool.query(
-      `SELECT name, estimated_gdp FROM countries 
-       WHERE estimated_gdp IS NOT NULL AND estimated_gdp > 0 
+      `SELECT name, estimated_gdp FROM countries
+       WHERE estimated_gdp IS NOT NULL AND estimated_gdp > 0
        ORDER BY estimated_gdp DESC LIMIT 5`
     );
-
     try {
       await generateSummaryImage({
+        countries: top5,  // Assuming the function expects 'countries' as the array
         totalCountries: count.total,
-        top5,
         timestamp: last.last_refreshed_at,
         outPath: SUMMARY_PATH,
       });
     } catch (imgErr) {
       console.warn("Image generation failed:", imgErr.message);
     }
-
     return res.json({
       message: "Refresh successful",
       total_countries: count.total,
@@ -152,14 +137,12 @@ export async function refreshCountries(req, res) {
     conn.release();
   }
 }
-
-// ✅ GET /countries
+// :white_check_mark: GET /countries
 export async function getCountries(req, res) {
   try {
     const { region, currency, sort, page = 1, limit = 500 } = req.query;
     const where = [];
     const params = [];
-
     if (region) {
       where.push("LOWER(region)=LOWER(?)");
       params.push(region);
@@ -168,16 +151,13 @@ export async function getCountries(req, res) {
       where.push("LOWER(currency_code)=LOWER(?)");
       params.push(currency);
     }
-
     const whereSQL = where.length ? "WHERE " + where.join(" AND ") : "";
     let orderSQL = "";
     if (sort === "gdp_desc") orderSQL = "ORDER BY estimated_gdp DESC";
     else if (sort === "gdp_asc") orderSQL = "ORDER BY estimated_gdp ASC";
-
     const offset = (Number(page) - 1) * Number(limit);
     const sql = `SELECT * FROM countries ${whereSQL} ${orderSQL} LIMIT ? OFFSET ?`;
     params.push(Number(limit), Number(offset));
-
     const [rows] = await pool.query(sql, params);
     res.json(rows);
   } catch (err) {
@@ -185,8 +165,7 @@ export async function getCountries(req, res) {
     res.status(500).json({ error: "Internal server error" });
   }
 }
-
-// ✅ GET /countries/:name
+// :white_check_mark: GET /countries/:name
 export async function getCountryByName(req, res) {
   try {
     const name = req.params.name;
@@ -201,8 +180,7 @@ export async function getCountryByName(req, res) {
     res.status(500).json({ error: "Internal server error" });
   }
 }
-
-// ✅ DELETE /countries/:name
+// :white_check_mark: DELETE /countries/:name
 export async function deleteCountryByName(req, res) {
   try {
     const name = req.params.name;
@@ -218,8 +196,7 @@ export async function deleteCountryByName(req, res) {
     res.status(500).json({ error: "Internal server error" });
   }
 }
-
-// ✅ GET /status
+// :white_check_mark: GET /status
 export async function getStatus(req, res) {
   try {
     const [[count]] = await pool.query(`SELECT COUNT(*) AS total FROM countries`);
@@ -235,8 +212,7 @@ export async function getStatus(req, res) {
     res.status(500).json({ error: "Internal server error" });
   }
 }
-
-// ✅ GET /countries/image
+// :white_check_mark: GET /countries/image
 export async function serveSummaryImage(req, res) {
   try {
     if (!fs.existsSync(SUMMARY_PATH))
@@ -248,4 +224,3 @@ export async function serveSummaryImage(req, res) {
     res.status(500).json({ error: "Internal server error" });
   }
 }
-
