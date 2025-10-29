@@ -31,9 +31,7 @@ export async function refreshCountries(req, res) {
   }
   const rates = ratesData?.rates || {};
   if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
-  const conn = await pool.getConnection();
   try {
-    await conn.beginTransaction();
     let processed = 0;
     for (const c of countriesData) {
       const name = c.name || c.name?.common || null;
@@ -60,50 +58,28 @@ export async function refreshCountries(req, res) {
           estimated_gdp = exchange_rate === 0 ? 0 : (population * m) / exchange_rate;
         }
       }
-      const [exists] = await conn.query(
-        `SELECT id FROM countries WHERE LOWER(name) = LOWER(?) LIMIT 1`,
-        [name]
-      );
-      console.log(`Checking ${name}: exists = ${exists.length > 0}`);
       const now = new Date();
-      if (exists.length > 0) {
-        await conn.query(
-          `UPDATE countries
-           SET capital=?, region=?, population=?, currency_code=?,
-               exchange_rate=?, estimated_gdp=?, flag_url=?, last_refreshed_at=?
-           WHERE id=?`,
-          [
-            capital,
-            region,
-            population,
-            currency_code,
-            exchange_rate,
-            estimated_gdp,
-            flag_url,
-            now,
-            exists[0].id,
-          ]
-        );
-      } else {
-        await conn.query(
-          `INSERT INTO countries (name, capital, region, population, currency_code, exchange_rate, estimated_gdp, flag_url, last_refreshed_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-          [
-            name,
-            capital,
-            region,
-            population,
-            currency_code,
-            exchange_rate,
-            estimated_gdp,
-            flag_url,
-            now,
-          ]
-        );
-      }
+      await pool.query(
+        `INSERT INTO countries (name, capital, region, population, currency_code, exchange_rate, estimated_gdp, flag_url, last_refreshed_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE
+           capital=VALUES(capital), region=VALUES(region), population=VALUES(population), currency_code=VALUES(currency_code),
+           exchange_rate=VALUES(exchange_rate), estimated_gdp=VALUES(estimated_gdp), flag_url=VALUES(flag_url), last_refreshed_at=VALUES(last_refreshed_at),
+           updated_at=NOW()`,
+        [
+          name,
+          capital,
+          region,
+          population,
+          currency_code,
+          exchange_rate,
+          estimated_gdp,
+          flag_url,
+          now,
+        ]
+      );
       processed++;
     }
-    await conn.commit();
     const [[count]] = await pool.query(`SELECT COUNT(*) AS total FROM countries`);
     const [[last]] = await pool.query(
       `SELECT MAX(last_refreshed_at) AS last_refreshed_at FROM countries`
@@ -130,11 +106,8 @@ export async function refreshCountries(req, res) {
       processed,
     });
   } catch (err) {
-    await conn.rollback();
     console.error("DB error:", err.message);
     return res.status(500).json({ error: "Internal server error" });
-  } finally {
-    conn.release();
   }
 }
 // :white_check_mark: GET /countries
